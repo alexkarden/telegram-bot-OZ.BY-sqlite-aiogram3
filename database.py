@@ -1,5 +1,6 @@
 import aiosqlite
 import logging
+import time
 
 from config import DATABASE_NAME
 
@@ -33,6 +34,13 @@ async def init_db():
                              "product_image_url TEXT,"
                              "status INTEGER NOT NULL)"
                              "")
+            # Создание таблицы user_products, если она еще не существует
+            await db.execute(""
+                             "CREATE TABLE IF NOT EXISTS user_products ("
+                             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                             "user_id INTEGER,"
+                             "product_id INTEGER)"
+                             "")
 
             # Создание таблицы product_price_history, если она еще не существует
             await db.execute(""
@@ -55,7 +63,8 @@ async def add_new_product(
     product_price: float,
     product_availability_status: str,
     product_data_retrieval_time: int,
-    status: int
+    status: int,
+    user_id: int
 ):
     try:
         async with aiosqlite.connect(DATABASE_NAME) as db:
@@ -101,7 +110,30 @@ async def add_new_product(
                                      ))
 
 
+
                     await db.commit()
+
+
+            async with db.execute("SELECT * FROM products WHERE product_url = ?", (product_url,)) as cursor:
+                result = await cursor.fetchone()
+                product_id = result[0]
+
+                async with db.execute("SELECT * FROM user_products WHERE user_id = ? AND product_id = ?",
+                                          (user_id, product_id,)) as cursor:
+                    result = await cursor.fetchone()
+                    if result is None:
+                        # И если не существует, добавляем товар к пользователю
+                        await db.execute(""
+                                         "INSERT INTO user_products ("
+                                         "user_id,"
+                                         "product_id"
+                                         ") VALUES (?, ?)", (
+                                             user_id,
+                                             product_id,
+                                         ))
+                        await db.commit()
+
+
 
     except Exception as e:
         logging.error(f"Ошибка при добавлении продукта: {e}")
@@ -132,7 +164,38 @@ async def check_price_product(product_id):
 
                 return result
     except Exception as e:
-        logging.error(f"Ошибка при добавлении продукта: {e}")
+        logging.error(f"Ошибка при извлечении цены товара: {e}")
+
+
+#-----------------------------------------------------------------------------------------------------------------------Возвращаем последние 2 записи
+async def check_last_two_price_times(product_id):
+    try:
+        async with aiosqlite.connect(DATABASE_NAME) as db:
+            # Получаем два последних времени извлечения данных для указанного продукта
+            async with db.execute("SELECT product_price FROM product_price_history WHERE product_id = ?"
+                                  "ORDER BY product_data_retrieval_time DESC LIMIT 2", (product_id,)) as cursor:
+
+                result = await cursor.fetchall()
+
+                if result:
+                    if len(result) == 1:
+                        # Если найдена только одна запись, возвращаем список с двумя одинаковыми значениями
+                        last_price = result[0][0]
+                        return [last_price, last_price]
+                    else:
+                        # Если найдено больше одной записи, возвращаем реальные последние два значения
+                        last_two_price = [row[0] for row in result]
+                        return last_two_price
+                else:
+                    logging.warning(f"Не найдены записи для продукта с ID: {product_id}")
+                    return None  # Возвращаем None, если записи не найдены
+
+    except Exception as e:
+        logging.error(f"Ошибка при проверке времени извлечения цены продукта: {e}")
+        return None  # Возвращаем None в случае возникновения ошибки
+
+
+
 
 
 #-----------------------------------------------------------------------------------------------------------------------Записываем новую цену
@@ -154,8 +217,73 @@ async def add_new_price_product(product_id,product_availability_status, product_
                              ))
             # Устанавливаем статус для товара
             await db.execute(""
-                             "UPDATE products SET status=0 WHERE id = ?",(product_id,))
+                             "UPDATE products SET status=1 WHERE id = ?",(product_id,))
 
             await db.commit()
     except Exception as e:
         logging.error(f"Ошибка при добавлении продукта: {e}")
+
+
+
+
+#-----------------------------------------------------------------------------------------------------------------------Добавляем нового пользователя
+# Добавление пользователя в базу данных
+async def add_user_db(user_id, first_name, last_name, username):
+    created_at = int(time.time())
+    try:
+        async with aiosqlite.connect(DATABASE_NAME) as db:
+            # Проверка, существует ли пользователь в базе данных
+            async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                result = await cursor.fetchone()
+                if result is not None:
+                    # Если пользователь существует, можно обновить его данные
+                    await db.execute("UPDATE users SET first_name = ?, last_name = ?, username = ?, user_added = ? WHERE user_id = ? ", (first_name, last_name, username, 1, user_id))
+                    logging.info(f"Пользователь с ID {user_id} обновлен в базе данных.")
+                else:
+                    # Если не существует, добавляем нового пользователя
+                    await db.execute("INSERT INTO users (user_id, first_name, last_name, username, user_added, user_blocked, created_at, type_of_notification, notification_frequency ) VALUES (?, ?, ?, ?, ?, ?, ?, ?,?)", (user_id, first_name, last_name, username, 1, 0, created_at,'full','never'))
+                    logging.info(f"Пользователь с ID {user_id} добавлен в базу данных.")
+                await db.commit()
+    except aiosqlite.Error as e:
+        logging.error(f"Ошибка при добавлении пользователя в базу данных: {e}")
+    except Exception as e:
+        logging.error(f"Произошла неожиданная ошибка: {e}")
+
+
+#-----------------------------------------------------------------------------------------------------------------------Извлекаем список товаров для рассылки
+async def get_list_product_for_rassilka(status):
+    try:
+        async with aiosqlite.connect(DATABASE_NAME) as db:
+            # Получаем все продукты из таблицы которые надо разослать
+            async with db.execute("SELECT * FROM products WHERE status =?", (status,)) as cursor:
+                result = await cursor.fetchall()
+                return result
+    except Exception as e:
+        logging.error(f"Ошибка при добавлении продукта: {e}")
+
+#-----------------------------------------------------------------------------------------------------------------------Извлекаем список пользователей для рассылки
+async def get_list_users_for_rassilka(product_id):
+    try:
+        async with aiosqlite.connect(DATABASE_NAME) as db:
+            # Получаем все продукты из таблицы которые надо разослать
+            async with db.execute("SELECT * FROM user_products WHERE product_id =?", (product_id,)) as cursor:
+                result = await cursor.fetchall()
+                return result
+    except Exception as e:
+        logging.error(f"Ошибка при добавлении продукта: {e}")
+
+
+#-----------------------------------------------------------------------------------------------------------------------Извлекаем список пользователей для рассылки
+async def change_status_product(status, product_id):
+    try:
+        async with aiosqlite.connect(DATABASE_NAME) as db:
+            # Получаем все продукты из таблицы которые надо разослать
+            await db.execute(
+                "UPDATE products SET status = ? WHERE id = ? ",
+                (status, product_id))
+
+            await db.commit()
+
+
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении статуса: {e}")
