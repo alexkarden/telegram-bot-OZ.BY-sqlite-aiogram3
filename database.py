@@ -287,3 +287,35 @@ async def change_status_product(status, product_id):
 
     except Exception as e:
         logging.error(f"Ошибка при обновлении статуса: {e}")
+
+
+
+
+#-----------------------------------------------------------------------------------------------------------------------Получаем список товаров пользователя
+async def get_user_list_product(user_id):
+    try:
+        async with aiosqlite.connect(DATABASE_NAME) as db:
+            # Получаем все продукты которые есть у пользователя
+            async with db.execute("SELECT * FROM user_products WHERE user_id =?", (user_id,)) as cursor:
+                result = await cursor.fetchall()
+                product_list=[]
+                for item in result:
+                    async with db.execute("SELECT * FROM products WHERE id =?", (item[2],)) as cursor:
+                        product_list.append(await cursor.fetchone())
+
+
+                return product_list
+    except Exception as e:
+        logging.error(f"Ошибка при добавлении продукта: {e}")
+
+
+#-----------------------------------------------------------------------------------------------------------------------Вынимаем товар из базы
+async def get_product_from_id(product_id):
+    try:
+        async with aiosqlite.connect(DATABASE_NAME) as db:
+            # Получаем все продукты которые есть у пользователя
+            async with db.execute("SELECT * FROM products WHERE id =?", (product_id,)) as cursor:
+                result = await cursor.fetchone()
+                return result
+    except Exception as e:
+        logging.error(f"Ошибка при добавлении продукта: {e}")
